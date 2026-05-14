@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>WorldCanva 🎨</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <div id="toolbar">
+        <div class="tool-group">
+            <button id="tool-pen" class="tool-btn active" title="Pen">✏️</button>
+            <button id="tool-eraser" class="tool-btn" title="Eraser">🧼</button>
+        </div>
+        
+        <div class="tool-group">
+            <label>Color</label>
+            <div id="color-palette">
+                <button class="color-btn active" data-color="#000000" style="background:#000"></button>
+                <button class="color-btn" data-color="#e74c3c" style="background:#e74c3c"></button>
+                <button class="color-btn" data-color="#e67e22" style="background:#e67e22"></button>
+                <button class="color-btn" data-color="#f1c40f" style="background:#f1c40f"></button>
+                <button class="color-btn" data-color="#2ecc71" style="background:#2ecc71"></button>
+                <button class="color-btn" data-color="#1abc9c" style="background:#1abc9c"></button>
+                <button class="color-btn" data-color="#3498db" style="background:#3498db"></button>
+                <button class="color-btn" data-color="#9b59b6" style="background:#9b59b6"></button>
+                <button class="color-btn" data-color="#e91e63" style="background:#e91e63"></button>
+                <input type="color" id="custom-color" value="#000000" title="Custom color">
+            </div>
+        </div>
+        
+        <div class="tool-group">
+            <label for="brush-size">Size: <span id="size-value">4</span>px</label>
+            <input type="range" id="brush-size" min="1" max="50" value="4">
+        </div>
+        
+        <div class="tool-group">
+            <button id="clear-btn" class="action-btn danger" title="Clear everything">🗑️ Clear</button>
+        </div>
+    </div>
+
+    <div id="info-bar">
+        <span id="user-name">Connecting...</span>
+        <span id="user-count">👥 1</span>
+    </div>
+
+    <div id="cursor-layer"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
