@@ -8,7 +8,9 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-    <canvas id="canvas"></canvas>
+    <div id="canvas-container">
+        <canvas id="canvas" width="6000" height="6000"></canvas>
+    </div>
 
     <div id="toolbar">
         <div class="tool-group">
@@ -38,7 +40,7 @@
         </div>
         
         <div class="tool-group">
-            <button id="clear-btn" class="action-btn danger" title="Clear everything">🗑️ Clear</button>
+            <button id="undo-btn" class="action-btn" title="Undo last stroke">↩️ Undo</button>
         </div>
     </div>
 

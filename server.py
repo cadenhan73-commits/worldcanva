@@ -113,13 +113,13 @@ def handle_cursor_move(data):
     emit('cursor-move', data, broadcast=True, include_self=False)
 
 
-@socketio.on('clear-canvas')
-def handle_clear():
-    global strokes
+@socketio.on('undo')
+def handle_undo():
     with strokes_lock:
-        strokes = []
+        if strokes:
+            strokes.pop()
     save_state()
-    emit('clear-canvas', broadcast=True)
+    emit('canvas-state', {'strokes': strokes}, broadcast=True)
 
 
 if __name__ == '__main__':

@@ -5,6 +5,13 @@
 // Canvas setup
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const canvasContainer = document.getElementById('canvas-container');
+
+// Canvas is a fixed square size (~3x typical desktop screen) for consistent
+// coordinates across all devices. Mobile users scroll to navigate.
+const CANVAS_SIZE = 6000;
+canvas.width = CANVAS_SIZE;
+canvas.height = CANVAS_SIZE;
 
 // State
 let isDrawing = false;
@@ -22,7 +29,7 @@ const toolEraser = document.getElementById('tool-eraser');
 const brushSize = document.getElementById('brush-size');
 const sizeValue = document.getElementById('size-value');
 const customColor = document.getElementById('custom-color');
-const clearBtn = document.getElementById('clear-btn');
+const undoBtn = document.getElementById('undo-btn');
 const userNameEl = document.getElementById('user-name');
 const userCountEl = document.getElementById('user-count');
 const colorBtns = document.querySelectorAll('.color-btn');
@@ -31,33 +38,26 @@ const cursorLayer = document.getElementById('cursor-layer');
 // Remote cursors
 const remoteCursors = new Map();
 
-// Resize canvas
-function resizeCanvas() {
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    ctx.putImageData(imageData, 0, 0);
+// Center the scroll position so the user starts in the middle of the canvas
+function centerScroll() {
+    canvasContainer.scrollLeft = (CANVAS_SIZE + 120 - window.innerWidth) / 2;
+    canvasContainer.scrollTop = (CANVAS_SIZE + 120 - window.innerHeight) / 2;
 }
-
-window.addEventListener('resize', () => {
-    resizeCanvas();
-});
-
-// Initialize canvas size
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
 
 // Drawing functions
 function getPoint(e) {
+    const rect = canvas.getBoundingClientRect();
+    let clientX, clientY;
     if (e.touches && e.touches.length > 0) {
-        return {
-            x: e.touches[0].clientX,
-            y: e.touches[0].clientY
-        };
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+    } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
     }
     return {
-        x: e.clientX,
-        y: e.clientY
+        x: clientX - rect.left,
+        y: clientY - rect.top
     };
 }
 
@@ -124,6 +124,13 @@ function drawStroke(stroke) {
 
 function clearCanvas() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function redrawCanvas(strokes) {
+    clearCanvas();
+    if (strokes) {
+        strokes.forEach(stroke => drawStroke(stroke));
+    }
 }
 
 // Event listeners for drawing
@@ -195,13 +202,10 @@ customColor.addEventListener('input', (e) => {
     }
 });
 
-// Clear button
-clearBtn.addEventListener('click', () => {
-    if (confirm('Clear the entire canvas for everyone? This cannot be undone!')) {
-        if (socket && socket.connected) {
-            socket.emit('clear-canvas');
-        }
-        clearCanvas();
+// Undo button
+undoBtn.addEventListener('click', () => {
+    if (socket && socket.connected) {
+        socket.emit('undo');
     }
 });
 
@@ -266,18 +270,11 @@ function connectSocket() {
     });
     
     socket.on('canvas-state', (data) => {
-        clearCanvas();
-        if (data.strokes) {
-            data.strokes.forEach(stroke => drawStroke(stroke));
-        }
+        redrawCanvas(data.strokes);
     });
     
     socket.on('draw', (data) => {
         drawStroke(data);
-    });
-    
-    socket.on('clear-canvas', () => {
-        clearCanvas();
     });
     
     socket.on('cursor-move', (data) => {
@@ -302,8 +299,9 @@ function connectSocket() {
 
 // Initialize
 connectSocket();
+centerScroll();
 
-// Prevent scrolling on mobile
+// Prevent scrolling on mobile when touching the canvas
 document.body.addEventListener('touchmove', (e) => {
     if (e.target === canvas) {
         e.preventDefault();
