@@ -76,18 +76,23 @@ def flush_pending_strokes():
         if not pending_strokes:
             return
         batch = pending_strokes.copy()
-        pending_strokes.clear()
 
     if not SUPABASE_URL or not SUPABASE_KEY:
+        with pending_lock:
+            pending_strokes.clear()
         return
 
     try:
         url = f"{SUPABASE_URL}/rest/v1/strokes"
         resp = requests.post(url, json=batch, headers=supabase_headers(), timeout=15)
         resp.raise_for_status()
+        # ONLY clear on success — otherwise they'll be retried
+        with pending_lock:
+            pending_strokes.clear()
         print(f"Flushed {len(batch)} strokes to Supabase")
     except Exception as e:
-        print(f"Failed to flush strokes to Supabase: {e}")
+        print(f"Failed to flush strokes to Supabase: {e} — will retry")
+        # Leave pending_strokes intact for next attempt
 
 
 def background_flusher():
@@ -100,7 +105,11 @@ def background_flusher():
 def graceful_shutdown(signum, frame):
     """Flush pending strokes before Render kills the container."""
     print("\nReceived shutdown signal, flushing pending strokes...")
-    flush_pending_strokes()
+    for _ in range(3):
+        flush_pending_strokes()
+        with pending_lock:
+            if not pending_strokes:
+                break
     save_state()
     sys.exit(0)
 
