@@ -10,6 +10,8 @@ import json
 import os
 import random
 import atexit
+import signal
+import sys
 from threading import Lock
 
 import requests
@@ -91,8 +93,20 @@ def flush_pending_strokes():
 def background_flusher():
     """Periodically flush pending strokes to Supabase."""
     while True:
-        socketio.sleep(3)
+        socketio.sleep(2)
         flush_pending_strokes()
+
+
+def graceful_shutdown(signum, frame):
+    """Flush pending strokes before Render kills the container."""
+    print("\nReceived shutdown signal, flushing pending strokes...")
+    flush_pending_strokes()
+    save_state()
+    sys.exit(0)
+
+
+# Register SIGTERM handler for graceful shutdown on Render
+signal.signal(signal.SIGTERM, graceful_shutdown)
 
 
 def get_recent_strokes():
@@ -280,9 +294,15 @@ def handle_draw(data):
         socketio.start_background_task(generate_snapshot)
 
     # Queue stroke for batched background save (no blocking!)
+    should_flush_now = False
     if SUPABASE_URL and SUPABASE_KEY:
         with pending_lock:
             pending_strokes.append(data)
+            # Flush immediately if queue gets large (burst drawing)
+            should_flush_now = len(pending_strokes) >= 50
+
+    if should_flush_now:
+        socketio.start_background_task(flush_pending_strokes)
 
     emit('draw', data, broadcast=True, include_self=False)
 
