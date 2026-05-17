@@ -28,7 +28,7 @@ html, body {
     border-radius: 4px;
     box-shadow: 0 4px 30px rgba(0,0,0,0.15);
     cursor: crosshair;
-    touch-action: none;
+    touch-action: pan-x pan-y pinch-zoom;
 }
 
 #toolbar {

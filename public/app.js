@@ -9,7 +9,7 @@ const canvasContainer = document.getElementById('canvas-container');
 
 // Canvas is a fixed square size (~3x typical desktop screen) for consistent
 // coordinates across all devices. Mobile users scroll to navigate.
-const CANVAS_SIZE = 6000;
+const CANVAS_SIZE = 1500;
 canvas.width = CANVAS_SIZE;
 canvas.height = CANVAS_SIZE;
 
@@ -62,6 +62,7 @@ function getPoint(e) {
 }
 
 function startDrawing(e) {
+    if (e.touches && e.touches.length > 1) return;
     isDrawing = true;
     const point = getPoint(e);
     lastX = point.x;
@@ -71,6 +72,7 @@ function startDrawing(e) {
 
 function draw(e) {
     if (!isDrawing) return;
+    if (e.touches && e.touches.length > 1) return;
     
     const point = getPoint(e);
     const x0 = lastX;
@@ -301,9 +303,9 @@ function connectSocket() {
 connectSocket();
 centerScroll();
 
-// Prevent scrolling on mobile when touching the canvas
+// Prevent scrolling on mobile when touching the canvas with one finger (drawing)
 document.body.addEventListener('touchmove', (e) => {
-    if (e.target === canvas) {
+    if (e.target === canvas && e.touches.length === 1) {
         e.preventDefault();
     }
 }, { passive: false });
