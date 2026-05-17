@@ -4,6 +4,8 @@ WorldCanva Server
 A real-time collaborative drawing canvas.
 """
 
+import base64
+import io
 import json
 import os
 import random
@@ -23,18 +25,25 @@ strokes = []
 strokes_lock = Lock()
 user_names = {}
 
+CANVAS_SIZE = 1500
+SNAPSHOT_THRESHOLD = 500
+
 # Supabase REST API config (optional — falls back to local file if not configured)
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').rstrip('/')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 
 
-def supabase_headers():
-    return {
+def supabase_headers(prefer_minimal=True):
+    headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "return=minimal"
     }
+    if prefer_minimal:
+        headers["Prefer"] = "return=minimal"
+    else:
+        headers["Prefer"] = "return=representation"
+    return headers
 
 
 ADJECTIVES = [
@@ -54,6 +63,89 @@ ANIMALS = [
 def generate_name():
     """Generate a random user name."""
     return f"{random.choice(ADJECTIVES)} {random.choice(ANIMALS)}"
+
+
+def get_recent_strokes():
+    """Return strokes after the latest snapshot, or all strokes if no snapshot."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return strokes
+
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/snapshots?select=timestamp&order=timestamp.desc&limit=1"
+        resp = requests.get(url, headers=supabase_headers(), timeout=5)
+        if resp.status_code == 200:
+            snapshots = resp.json()
+            if snapshots:
+                snapshot_time = snapshots[0]['timestamp']
+                return [s for s in strokes if s.get('timestamp', 0) > snapshot_time]
+    except Exception as e:
+        print(f"Failed to get snapshot timestamp: {e}")
+
+    return strokes
+
+
+def generate_snapshot():
+    """Render all strokes to a PNG and save to Supabase."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        print("Pillow not installed, skipping snapshot generation")
+        return
+
+    with strokes_lock:
+        if not strokes:
+            return
+        strokes_copy = strokes.copy()
+        last_timestamp = strokes_copy[-1].get('timestamp', 0)
+
+    try:
+        img = Image.new('RGBA', (CANVAS_SIZE, CANVAS_SIZE), (255, 255, 255, 255))
+        draw = ImageDraw.Draw(img)
+
+        for stroke in strokes_copy:
+            x0, y0 = stroke['x0'], stroke['y0']
+            x1, y1 = stroke['x1'], stroke['y1']
+            size = int(stroke.get('size', 4))
+            tool = stroke.get('tool', 'pen')
+
+            if tool == 'eraser':
+                draw.line([(x0, y0), (x1, y1)], fill=(255, 255, 255, 255), width=size)
+            else:
+                color = stroke.get('color', '#000000')
+                if color.startswith('#') and len(color) == 7:
+                    r = int(color[1:3], 16)
+                    g = int(color[3:5], 16)
+                    b = int(color[5:7], 16)
+                else:
+                    r, g, b = 0, 0, 0
+                draw.line([(x0, y0), (x1, y1)], fill=(r, g, b, 255), width=size)
+
+        buffer = io.BytesIO()
+        img.save(buffer, format='PNG')
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        # Save to Supabase
+        url = f"{SUPABASE_URL}/rest/v1/snapshots"
+        headers = supabase_headers(prefer_minimal=False)
+        resp = requests.post(url, json={
+            'image_base64': img_base64,
+            'stroke_count': len(strokes_copy),
+            'timestamp': last_timestamp
+        }, headers=headers, timeout=15)
+        resp.raise_for_status()
+
+        new_snapshot = resp.json()[0]
+        print(f"Generated snapshot with {len(strokes_copy)} strokes (id={new_snapshot['id']})")
+
+        # Delete old snapshots
+        try:
+            del_url = f"{SUPABASE_URL}/rest/v1/snapshots?id=neq.{new_snapshot['id']}"
+            requests.delete(del_url, headers=supabase_headers(), timeout=10)
+        except Exception as e:
+            print(f"Failed to clean up old snapshots: {e}")
+
+    except Exception as e:
+        print(f"Failed to generate snapshot: {e}")
 
 
 def load_state():
@@ -115,7 +207,27 @@ def handle_connect():
     }
     print(f"Connected: {name} ({request.sid})")
     emit('assign-name', user_names[request.sid])
-    emit('canvas-state', {'strokes': strokes})
+
+    # Send snapshot + recent strokes
+    snapshot_base64 = None
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/snapshots?select=image_base64&order=timestamp.desc&limit=1"
+            resp = requests.get(url, headers=supabase_headers(), timeout=5)
+            if resp.status_code == 200:
+                snapshots = resp.json()
+                if snapshots:
+                    snapshot_base64 = snapshots[0]['image_base64']
+        except Exception as e:
+            print(f"Failed to get snapshot for new user: {e}")
+
+    recent_strokes = get_recent_strokes()
+
+    emit('canvas-state', {
+        'strokes': recent_strokes,
+        'snapshot': snapshot_base64
+    })
+
     emit('user-count', {'count': len(user_names)}, broadcast=True)
 
 
@@ -131,13 +243,20 @@ def handle_disconnect():
 def handle_draw(data):
     with strokes_lock:
         strokes.append(data)
-        if SUPABASE_URL and SUPABASE_KEY:
-            try:
-                url = f"{SUPABASE_URL}/rest/v1/strokes"
-                resp = requests.post(url, json=data, headers=supabase_headers(), timeout=10)
-                resp.raise_for_status()
-            except Exception as e:
-                print(f"Failed to save stroke to Supabase: {e}")
+        stroke_count = len(strokes)
+
+    # Trigger snapshot generation every N strokes
+    if stroke_count > 0 and stroke_count % SNAPSHOT_THRESHOLD == 0:
+        socketio.start_background_task(generate_snapshot)
+
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/strokes"
+            resp = requests.post(url, json=data, headers=supabase_headers(), timeout=10)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"Failed to save stroke to Supabase: {e}")
+
     emit('draw', data, broadcast=True, include_self=False)
 
 
@@ -165,12 +284,22 @@ def handle_undo():
                         requests.delete(del_url, headers=supabase_headers(), timeout=10)
                 except Exception as e:
                     print(f"Failed to undo in Supabase: {e}")
-    save_state()
-    emit('canvas-state', {'strokes': strokes}, broadcast=True)
+
+    recent_strokes = get_recent_strokes()
+    emit('canvas-state', {
+        'strokes': recent_strokes,
+        'snapshot': None
+    }, broadcast=True)
 
 
 if __name__ == '__main__':
     load_state()
+
+    # Generate initial snapshot if there are many strokes on startup
+    if len(strokes) > SNAPSHOT_THRESHOLD:
+        print(f"Found {len(strokes)} strokes on startup, generating initial snapshot...")
+        generate_snapshot()
+
     atexit.register(save_state)
 
     print("=" * 50)

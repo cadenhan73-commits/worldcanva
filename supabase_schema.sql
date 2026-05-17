@@ -12,5 +12,12 @@ CREATE TABLE IF NOT EXISTS strokes (
     timestamp BIGINT NOT NULL
 );
 
--- Optional: index for fast ordering by timestamp
 CREATE INDEX IF NOT EXISTS idx_strokes_timestamp ON strokes(timestamp);
+
+CREATE TABLE IF NOT EXISTS snapshots (
+    id SERIAL PRIMARY KEY,
+    image_base64 TEXT NOT NULL,
+    stroke_count INTEGER NOT NULL DEFAULT 0,
+    timestamp BIGINT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);

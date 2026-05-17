@@ -2,3 +2,4 @@ flask>=3.0
 flask-socketio>=5.3
 eventlet>=0.35
 requests>=2.20.0
+Pillow>=10.0

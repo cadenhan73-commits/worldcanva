@@ -22,6 +22,7 @@ let currentColor = '#000000';
 let currentSize = 4;
 let myName = 'You';
 let socket = null;
+let currentSnapshot = null;
 
 // UI elements
 const toolPen = document.getElementById('tool-pen');
@@ -130,6 +131,9 @@ function clearCanvas() {
 
 function redrawCanvas(strokes) {
     clearCanvas();
+    if (currentSnapshot && currentSnapshot.complete && currentSnapshot.naturalWidth > 0) {
+        ctx.drawImage(currentSnapshot, 0, 0);
+    }
     if (strokes) {
         strokes.forEach(stroke => drawStroke(stroke));
     }
@@ -272,7 +276,26 @@ function connectSocket() {
     });
     
     socket.on('canvas-state', (data) => {
-        redrawCanvas(data.strokes);
+        if (data.snapshot) {
+            // Initial load: draw snapshot image first, then strokes on top
+            clearCanvas();
+            currentSnapshot = new Image();
+            currentSnapshot.onload = () => {
+                ctx.drawImage(currentSnapshot, 0, 0);
+                if (data.strokes) {
+                    data.strokes.forEach(stroke => drawStroke(stroke));
+                }
+            };
+            currentSnapshot.onerror = () => {
+                console.error('Failed to load snapshot');
+                currentSnapshot = null;
+                redrawCanvas(data.strokes);
+            };
+            currentSnapshot.src = 'data:image/png;base64,' + data.snapshot;
+        } else {
+            // Undo or regular update: redraw snapshot + strokes
+            redrawCanvas(data.strokes);
+        }
     });
     
     socket.on('draw', (data) => {
