@@ -10,15 +10,9 @@ import random
 import atexit
 from threading import Lock
 
+import requests
 from flask import Flask, send_from_directory, request
 from flask_socketio import SocketIO, emit
-
-# Supabase integration (optional — falls back to local file if not configured)
-try:
-    from supabase import create_client
-    HAS_SUPABASE = True
-except ImportError:
-    HAS_SUPABASE = False
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'worldcanva-secret-key'
@@ -29,18 +23,19 @@ strokes = []
 strokes_lock = Lock()
 user_names = {}
 
-# Initialize Supabase client if env vars are present
-supabase = None
-SUPABASE_URL = os.environ.get('SUPABASE_URL')
-SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
+# Supabase REST API config (optional — falls back to local file if not configured)
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '').rstrip('/')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 
-if HAS_SUPABASE and SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("Connected to Supabase")
-    except Exception as e:
-        print(f"Failed to connect to Supabase: {e}")
-        supabase = None
+
+def supabase_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+
 
 ADJECTIVES = [
     "Happy", "Sleepy", "Curious", "Brave", "Silly", "Clever", "Wild", "Gentle",
@@ -65,15 +60,12 @@ def load_state():
     """Load canvas state from Supabase (preferred) or local file."""
     global strokes
 
-    if supabase:
+    if SUPABASE_URL and SUPABASE_KEY:
         try:
-            result = (
-                supabase.table('strokes')
-                .select('x0,y0,x1,y1,color,size,tool,timestamp')
-                .order('timestamp')
-                .execute()
-            )
-            strokes = result.data
+            url = f"{SUPABASE_URL}/rest/v1/strokes?select=x0,y0,x1,y1,color,size,tool,timestamp&order=timestamp.asc"
+            resp = requests.get(url, headers=supabase_headers(), timeout=10)
+            resp.raise_for_status()
+            strokes = resp.json()
             print(f"Loaded {len(strokes)} strokes from Supabase")
             return
         except Exception as e:
@@ -139,9 +131,11 @@ def handle_disconnect():
 def handle_draw(data):
     with strokes_lock:
         strokes.append(data)
-        if supabase:
+        if SUPABASE_URL and SUPABASE_KEY:
             try:
-                supabase.table('strokes').insert(data).execute()
+                url = f"{SUPABASE_URL}/rest/v1/strokes"
+                resp = requests.post(url, json=data, headers=supabase_headers(), timeout=10)
+                resp.raise_for_status()
             except Exception as e:
                 print(f"Failed to save stroke to Supabase: {e}")
     emit('draw', data, broadcast=True, include_self=False)
@@ -159,18 +153,16 @@ def handle_undo():
     with strokes_lock:
         if strokes:
             strokes.pop()
-            if supabase:
+            if SUPABASE_URL and SUPABASE_KEY:
                 try:
-                    result = (
-                        supabase.table('strokes')
-                        .select('id')
-                        .order('timestamp', desc=True)
-                        .limit(1)
-                        .execute()
-                    )
-                    if result.data:
-                        last_id = result.data[0]['id']
-                        supabase.table('strokes').delete().eq('id', last_id).execute()
+                    url = f"{SUPABASE_URL}/rest/v1/strokes?select=id&order=timestamp.desc&limit=1"
+                    resp = requests.get(url, headers=supabase_headers(), timeout=10)
+                    resp.raise_for_status()
+                    result = resp.json()
+                    if result:
+                        last_id = result[0]['id']
+                        del_url = f"{SUPABASE_URL}/rest/v1/strokes?id=eq.{last_id}"
+                        requests.delete(del_url, headers=supabase_headers(), timeout=10)
                 except Exception as e:
                     print(f"Failed to undo in Supabase: {e}")
     save_state()
