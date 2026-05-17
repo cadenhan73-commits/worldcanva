@@ -4,6 +4,10 @@ WorldCanva Server
 A real-time collaborative drawing canvas.
 """
 
+# Monkey-patch stdlib for eventlet BEFORE any other imports
+import eventlet
+eventlet.monkey_patch()
+
 import base64
 import io
 import json
@@ -75,7 +79,8 @@ def flush_pending_strokes():
     with pending_lock:
         if not pending_strokes:
             return
-        batch = pending_strokes.copy()
+        # Limit batch size to avoid PostgREST issues
+        batch = pending_strokes[:100].copy()
 
     if not SUPABASE_URL or not SUPABASE_KEY:
         with pending_lock:
@@ -85,10 +90,12 @@ def flush_pending_strokes():
     try:
         url = f"{SUPABASE_URL}/rest/v1/strokes"
         resp = requests.post(url, json=batch, headers=supabase_headers(), timeout=15)
-        resp.raise_for_status()
+        if resp.status_code not in (200, 201, 204):
+            print(f"Supabase returned {resp.status_code}: {resp.text[:200]}")
+            return
         # ONLY clear on success — otherwise they'll be retried
         with pending_lock:
-            pending_strokes.clear()
+            pending_strokes = pending_strokes[len(batch):]
         print(f"Flushed {len(batch)} strokes to Supabase")
     except Exception as e:
         print(f"Failed to flush strokes to Supabase: {e} — will retry")
