@@ -23,6 +23,8 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 STATE_FILE = 'canvas-state.json'
 strokes = []
 strokes_lock = Lock()
+pending_strokes = []
+pending_lock = Lock()
 user_names = {}
 
 CANVAS_SIZE = 1500
@@ -63,6 +65,34 @@ ANIMALS = [
 def generate_name():
     """Generate a random user name."""
     return f"{random.choice(ADJECTIVES)} {random.choice(ANIMALS)}"
+
+
+def flush_pending_strokes():
+    """Flush batched strokes to Supabase in the background."""
+    global pending_strokes
+    with pending_lock:
+        if not pending_strokes:
+            return
+        batch = pending_strokes.copy()
+        pending_strokes.clear()
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/strokes"
+        resp = requests.post(url, json=batch, headers=supabase_headers(), timeout=15)
+        resp.raise_for_status()
+        print(f"Flushed {len(batch)} strokes to Supabase")
+    except Exception as e:
+        print(f"Failed to flush strokes to Supabase: {e}")
+
+
+def background_flusher():
+    """Periodically flush pending strokes to Supabase."""
+    while True:
+        socketio.sleep(3)
+        flush_pending_strokes()
 
 
 def get_recent_strokes():
@@ -249,13 +279,10 @@ def handle_draw(data):
     if stroke_count > 0 and stroke_count % SNAPSHOT_THRESHOLD == 0:
         socketio.start_background_task(generate_snapshot)
 
+    # Queue stroke for batched background save (no blocking!)
     if SUPABASE_URL and SUPABASE_KEY:
-        try:
-            url = f"{SUPABASE_URL}/rest/v1/strokes"
-            resp = requests.post(url, json=data, headers=supabase_headers(), timeout=10)
-            resp.raise_for_status()
-        except Exception as e:
-            print(f"Failed to save stroke to Supabase: {e}")
+        with pending_lock:
+            pending_strokes.append(data)
 
     emit('draw', data, broadcast=True, include_self=False)
 
@@ -269,6 +296,9 @@ def handle_cursor_move(data):
 
 @socketio.on('undo')
 def handle_undo():
+    # Flush any pending strokes first so undo is accurate
+    flush_pending_strokes()
+
     with strokes_lock:
         if strokes:
             strokes.pop()
@@ -300,6 +330,10 @@ if __name__ == '__main__':
         print(f"Found {len(strokes)} strokes on startup, generating initial snapshot...")
         generate_snapshot()
 
+    # Start background stroke flusher
+    socketio.start_background_task(background_flusher)
+
+    atexit.register(flush_pending_strokes)
     atexit.register(save_state)
 
     print("=" * 50)
